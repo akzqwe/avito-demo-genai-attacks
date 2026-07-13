@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Avito — Админка поддержки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <div>Avito — Админка поддержки <span class="badge">admin@avito.ru</span></div>
+  <div class="nav">
+    <a href="/">Чат</a>
+    <a href="/admin">Админка</a>
+    <a href="/attacker">Атакующий</a>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h2>Защитные меры (toggle для демо)</h2>
+    <small class="muted">
+      У каждой защиты <b>розовый/малиновый/фиолетовый</b> цветной край и
+      тег <span class="toggle-tag" style="display:inline-block">LLM…</span>
+      — он показывает, какую <b>цепочку атак</b> закрывает эта защита.
+      Цвета совпадают с цветными pill-ами у payload-кнопок на витрине:
+      <span class="payload-tag chain-xss">LLM01/05/06</span>
+      <span class="payload-tag chain-leak">LLM02/07</span>
+      <span class="payload-tag chain-rag">LLM08/09</span>.
+      Включённые toggle подсвечены фиолетовым фоном.
+    </small>
+    <div class="toggles" id="toggles" style="margin-top:12px"></div>
+    <hr>
+    <div>
+      <button id="refresh">Обновить</button>
+      <button id="reset">Сбросить демо</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>OWASP LLM Top 10 — карта покрытия</h2>
+    <div class="owasp-map">
+      <div class="owasp-col">
+        <h3>Live-цепочки</h3>
+        <div class="owasp-row">
+          <span class="owasp-pill live">LIVE</span>
+          <span><b>LLM01 + LLM05 + LLM06</b> — XSS через add_internal_note</span>
+        </div>
+        <div class="owasp-row">
+          <span class="owasp-pill live">LIVE</span>
+          <span><b>LLM02 + LLM07</b> — утечка system prompt + админ-контактов</span>
+        </div>
+        <div class="owasp-row">
+          <span class="owasp-pill live">LIVE</span>
+          <span><b>LLM08 + LLM09</b> — RAG-poisoning → misinformation</span>
+        </div>
+      </div>
+      <div class="owasp-col">
+        <h3>Talking points</h3>
+        <div class="owasp-row">
+          <span class="owasp-pill hint">HINT</span>
+          <span><b>LLM03</b> — Supply Chain (см. баннер ниже)</span>
+        </div>
+        <div class="owasp-row">
+          <span class="owasp-pill hint">HINT</span>
+          <span><b>LLM04</b> — Data / Model Poisoning</span>
+        </div>
+        <div class="owasp-row">
+          <span class="owasp-pill hint">HINT</span>
+          <span><b>LLM10</b> — Unbounded Consumption</span>
+        </div>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="banner-hint">
+      <b>LLM03 Supply Chain:</b> текущий рантайм-конфиг (демо):
+      <code>model = unverified-hf-mirror/llama-3.1-finetune-v2.gguf</code>,
+      SHA-256 не сверяется, mirror не подписан. В прод-чек-листе должен быть
+      pinned digest + проверка подписи + изолированный CI-step загрузки.
+    </div>
+
+    <div class="banner-hint">
+      <b>LLM04 Data / Model Poisoning:</b> UGC-объявления уходят в
+      <code>training/2026Q3</code> датасет для дообучения. Без явного
+      provenance-тэга и фильтра адверсариальных строк злоумышленник может
+      «протравить» будущую модель тем же payload, который он уже использует в
+      описании объявления.
+    </div>
+
+    <div class="banner-hint">
+      <b>LLM10 Unbounded Consumption:</b>
+      <code>tool_call_budget_per_ticket = ∞</code>,
+      <code>max_steps = ∞</code>. В прод-инцидентах это превращается в
+      out-of-context loop с тысячами вызовов get_listing, исчерпанием
+      LLM-бюджета и DoS подсистемы поддержки.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Тикеты поддержки</h2>
+    <div id="tickets"></div>
+  </div>
+</main>
+
+<script>
+// Demo-only: a fake "admin session" cookie that the XSS will try to steal.
+document.cookie = "ADMIN_SESSION=eyJhZG1pbiI6dHJ1ZSwidWlkIjo0Mn0.SIGNED; path=/";
+
+const TOGGLES = [
+  {
+    key: "sanitize_tool_output",
+    title: "Чистить описание объявления от служебных маркеров",
+    sub:   "Срезает строки вида [SYSTEM …]: и HTML-комментарии до того, как агент их прочтёт.",
+    tag:   "LLM01",
+  },
+  {
+    key: "sanitize_note_arg",
+    title: "Вырезать HTML из текста заметки модератора",
+    sub:   "Strip-HTML на границе тула add_internal_note. Если payload и проскочит в LLM, до DOM админки он не доедет.",
+    tag:   "LLM05/06",
+  },
+  {
+    key: "escape_admin_render",
+    title: "Экранировать HTML при показе заметок в админке",
+    sub:   "API возвращает заметки уже HTML-escaped — payload виден буквами на странице, но не исполняется.",
+    tag:   "LLM05",
+  },
+  {
+    key: "require_confirmation",
+    title: "Запрашивать подтверждение модератора перед записью заметки",
+    sub:   "add_internal_note уходит в pending и ждёт клика модератора. Human-in-the-loop.",
+    tag:   "LLM06",
+  },
+  {
+    key: "segregate_data_instructions",
+    title: "Помечать описание объявления как «недоверенные данные»",
+    sub:   "Описание оборачивается в <untrusted_data>; агент игнорирует инструкции, найденные внутри.",
+    tag:   "LLM01 + LLM02/07",
+  },
+  {
+    key: "redact_system_prompt",
+    title: "Скрывать содержимое system prompt в служебных тулах",
+    sub:   "dump_diagnostic возвращает [REDACTED] вместо реальных секретов. Атака проходит — утечь нечему.",
+    tag:   "LLM02/07",
+  },
+  {
+    key: "rerank_kb_by_provenance",
+    title: "Понижать UGC-источники в выдаче базы знаний",
+    sub:   "UGC-объявления получают −0.5 к скору в search_knowledge_base. FAQ возвращается в top-1.",
+    tag:   "LLM08/09",
+  },
+];
+
+async function loadState() {
+  const r = await fetch("/api/admin/state");
+  const s = await r.json();
+  renderToggles(s.defenses);
+  renderTickets(s.tickets);
+}
+
+function chainKey(tag) {
+  // Group color stripe by primary chain mentioned in the tag.
+  if (tag.includes("LLM08") || tag.includes("LLM09")) return "rag";
+  if (tag.includes("LLM02") || tag.includes("LLM07")) return "leak";
+  return "xss";
+}
+
+function renderToggles(d) {
+  const root = document.getElementById("toggles");
+  root.innerHTML = "";
+  for (const t of TOGGLES) {
+    const wrap = document.createElement("label");
+    wrap.className = "toggle";
+    wrap.dataset.chain = chainKey(t.tag);
+    wrap.dataset.on = !!d[t.key];
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!d[t.key];
+    cb.onchange = async () => {
+      cb.disabled = true;
+      wrap.dataset.on = cb.checked;
+      try {
+        await fetch("/api/admin/defenses", {
+          method: "POST", headers: {"content-type":"application/json"},
+          body: JSON.stringify({[t.key]: cb.checked}),
+        });
+        wrap.classList.add("saved");
+        setTimeout(() => wrap.classList.remove("saved"), 700);
+      } catch (e) {
+        // Revert UI if the request failed.
+        cb.checked = !cb.checked;
+        wrap.dataset.on = cb.checked;
+      } finally {
+        cb.disabled = false;
+      }
+    };
+    wrap.appendChild(cb);
+
+    const body = document.createElement("div");
+    body.className = "toggle-body";
+    const titleRow = document.createElement("div");
+    titleRow.className = "toggle-title-row";
+    const title = document.createElement("span");
+    title.className = "toggle-title";
+    title.textContent = t.title;
+    titleRow.appendChild(title);
+    const tag = document.createElement("span");
+    tag.className = "toggle-tag";
+    tag.textContent = t.tag;
+    titleRow.appendChild(tag);
+    body.appendChild(titleRow);
+    const sub = document.createElement("div");
+    sub.className = "toggle-sub";
+    sub.textContent = t.sub;
+    body.appendChild(sub);
+    wrap.appendChild(body);
+
+    root.appendChild(wrap);
+  }
+}
+
+function renderTickets(tickets) {
+  const root = document.getElementById("tickets");
+  root.innerHTML = "";
+  if (!tickets.length) {
+    root.innerHTML = "<small class='muted'>Пока тикетов нет. Зайдите в чат и напишите агенту.</small>";
+    return;
+  }
+  for (const t of tickets) {
+    const div = document.createElement("div");
+    div.className = "ticket";
+    const h = document.createElement("h3");
+    h.textContent = `Тикет #${t.id} — ${t.user}` +
+                    (t.listing_id ? ` (listing #${t.listing_id})` : "");
+    div.appendChild(h);
+
+    const conv = document.createElement("div");
+    conv.style.fontSize = "13px";
+    for (const m of t.messages) {
+      const line = document.createElement("div");
+      line.innerHTML = `<b>${m.role}:</b> `;
+      line.appendChild(document.createTextNode(m.text));
+      conv.appendChild(line);
+    }
+    div.appendChild(conv);
+
+    if (t.notes.length) {
+      const nd = document.createElement("div");
+      nd.className = "notes";
+      const head = document.createElement("div");
+      head.innerHTML = "<b>Внутренние заметки модератора:</b>";
+      nd.appendChild(head);
+      t.notes.forEach((n, idx) => {
+        const row = document.createElement("div");
+        row.className = "note";
+        // ⚠️ VULNERABLE SINK: notes are rendered as HTML.
+        // The /api/admin/state endpoint may pre-escape them when the
+        // `escape_admin_render` defense is enabled — that's the mitigation.
+        row.innerHTML = n.text;
+        if (n.pending) {
+          const b = document.createElement("button");
+          b.textContent = "Подтвердить";
+          b.style.marginLeft = "6px";
+          b.onclick = async () => {
+            await fetch(`/api/admin/approve_note?ticket_id=${t.id}&note_idx=${idx}`,
+                        {method:"POST"});
+            loadState();
+          };
+          row.appendChild(b);
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = "ждёт подтверждения";
+          row.appendChild(badge);
+        }
+        nd.appendChild(row);
+      });
+      div.appendChild(nd);
+    }
+    root.appendChild(div);
+  }
+}
+
+document.getElementById("refresh").onclick = loadState;
+document.getElementById("reset").onclick = async () => {
+  await fetch("/api/admin/reset", {method:"POST"});
+  loadState();
+};
+loadState();
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Атакующий — лог exfiltration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <div>Лог атакующего <span class="badge">демо</span></div>
+  <div class="nav">
+    <a href="/">Чат</a>
+    <a href="/admin">Админка</a>
+    <a href="/attacker">Атакующий</a>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h2>Полученные данные с XSS</h2>
+    <p><small class="muted">
+      Каждый раз, когда XSS-полезная нагрузка отрабатывает в браузере модератора,
+      она делает GET-запрос на <code>/attacker/collect?c=...</code>. Здесь — лог
+      того, что прилетело.
+    </small></p>
+    <div id="events"></div>
+  </div>
+</main>
+<script>
+async function load() {
+  const r = await fetch("/api/attacker/log");
+  const data = await r.json();
+  const root = document.getElementById("events");
+  if (!data.events.length) {
+    root.innerHTML = "<small class='muted'>Пока ничего. Откройте /admin как «модератор», чтобы спровоцировать XSS.</small>";
+    return;
+  }
+  root.innerHTML = "";
+  for (const e of data.events.slice().reverse()) {
+    const div = document.createElement("div");
+    div.className = "attacker-event";
+    const ts = new Date(e.ts * 1000).toISOString();
+    div.textContent =
+        `[${ts}]\nIP: ${e.ip}\nUA: ${e.ua}\nCOOKIE: ${e.cookie}`;
+    root.appendChild(div);
+  }
+}
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# secrets
+credentials.json
+token.json
+*.pem
+*.key
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# large binaries / bundles
+clickhouse
+*.pptx
+
+# local plans / notes
+plan.json
+
+# demo instructions (kept out of the repo intentionally)
+README.md
